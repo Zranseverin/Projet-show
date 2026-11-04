@@ -13,7 +13,6 @@ ou dans l'environnement `production` :
 | --- | --- |
 | SSH_HOST | Adresse du serveur |
 | SSH_USER | Utilisateur SSH de déploiement |
-| SSH_PORT | Port SSH, 22 par défaut |
 | SSH_PRIVATE_KEY | Clé privée dédiée, avec passphrase ; clé publique dans authorized_keys |
 | SSH_PASSPHRASE | Passphrase qui déverrouille la clé SSH_PRIVATE_KEY |
 | ENV_FILE | Contenu complet du .env de production, requis au premier deploiement |
@@ -79,3 +78,5 @@ Le serveur doit deja disposer de PHP 8.4, de ses extensions, de rsync et de Bash
 L'utilisateur SSH doit pouvoir creer le chemin DEPLOY_PATH ; configurer le
 serveur web vers DEPLOY_PATH/public et les permissions du processus PHP.
 Les migrations creent les tables apres le transfert du code.
+
+Le port SSH est fixe a 22 dans le workflow ; aucun secret SSH_PORT n’est utilise.
