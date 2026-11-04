@@ -1,0 +1,179 @@
+name: Deploy via SSH
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    defaults:
+      run:
+        working-directory: librairie
+    env:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PORT: ${{ secrets.SSH_PORT || '22' }}
+      DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The application may be stored as a separate nested Git repository.
+      - name: Checkout application when absent from parent repository
+        if: ${{ hashFiles('librairie/composer.json') == '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: Zranseverin/Projet-show
+          ref: master
+          path: librairie
+          token: ${{ secrets.APP_REPO_TOKEN || github.token }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_sqlite
+          tools: composer:v2
+          coverage: none
+
+      - name: Install PHP dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress --optimize-autoloader
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build assets
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+          npm run build
+
+      - name: Run Laravel tests
+        env:
+          APP_ENV: testing
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+          DB_URL: ''
+          CACHE_STORE: array
+          SESSION_DRIVER: array
+          QUEUE_CONNECTION: sync
+          MAIL_MAILER: array
+        run: |
+          export APP_KEY="$(php -r 'echo "base64:".base64_encode(random_bytes(32));')"
+          php artisan test
+
+      - name: Prepare production dependencies
+        run: composer install --no-dev --prefer-dist --no-interaction --no-progress --optimize-autoloader
+
+      - name: Configure SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_PRIVATE_KEY:?Missing SSH_PRIVATE_KEY}"
+          : "${SSH_PASSPHRASE:?Missing SSH_PASSPHRASE}"
+          # Restrict the path so it can safely be passed to the remote shell.
+          [[ "$DEPLOY_PATH" =~ ^/[a-zA-Z0-9_./-]+$ && "$DEPLOY_PATH" != / ]]
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]]
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          test -s ~/.ssh/known_hosts
+          eval "$(ssh-agent -s)"
+          printf 'SSH_AUTH_SOCK=%s\nSSH_AGENT_PID=%s\n' "$SSH_AUTH_SOCK" "$SSH_AGENT_PID" >> "$GITHUB_ENV"
+          askpass_script="$(mktemp "$RUNNER_TEMP/ssh-askpass.XXXXXX")"
+          trap 'rm -f "$askpass_script"' EXIT
+          printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$SSH_PASSPHRASE"' > "$askpass_script"
+          chmod 700 "$askpass_script"
+          export SSH_ASKPASS="$askpass_script"
+          export SSH_ASKPASS_REQUIRE=force
+          export DISPLAY=:0
+          ssh-add ~/.ssh/deploy_key < /dev/null
+
+      - name: Prepare server
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "bash -s -- '$DEPLOY_PATH'" <<'REMOTE'
+          set -euo pipefail
+          command -v php
+          command -v rsync
+          mkdir -p "$1"
+          cd "$1"
+          mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs bootstrap/cache
+          test -w storage
+          test -w bootstrap/cache
+          REMOTE
+
+      - name: Initialize production environment on first deployment
+        env:
+          ENV_FILE: ${{ secrets.ENV_FILE }}
+        run: |
+          set -euo pipefail
+          remote_script=$(cat <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          if [ -f .env ]; then
+            cat > /dev/null
+            echo 'Existing .env preserved.'
+          else
+            umask 077
+            env_tmp=$(mktemp .env.init.XXXXXX)
+            trap 'rm -f "$env_tmp"' EXIT
+            cat > "$env_tmp"
+            test -s "$env_tmp" || { echo 'Missing ENV_FILE secret for first deployment.' >&2; exit 1; }
+            mv "$env_tmp" .env
+          fi
+          REMOTE
+          )
+          printf -v remote_command 'bash -c %q -- %q' "$remote_script" "$DEPLOY_PATH"
+          printf '%s' "$ENV_FILE" | ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "$remote_command"
+
+      - name: Transfer application
+        run: |
+          rsync -az --delay-updates --safe-links \
+            -e "ssh -i $HOME/.ssh/deploy_key -p $SSH_PORT -o BatchMode=yes -o StrictHostKeyChecking=yes" \
+            --exclude='.git/' --exclude='.github/' --exclude='.env*' \
+            --exclude='auth.json' --exclude='node_modules/' --exclude='tests/' \
+            --exclude='/storage/' --exclude='/bootstrap/cache/*.php' \
+            --exclude='/public/storage' --exclude='/public/hot' \
+            --exclude='*.zip' --exclude='*.log' \
+            ./ "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/"
+
+      - name: Run Laravel deployment commands
+        run: |
+          ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" "bash -s -- '$DEPLOY_PATH'" <<'REMOTE'
+          set -euo pipefail
+          cd "$1"
+          php artisan config:clear
+          php artisan migrate --force
+          php artisan storage:link
+          php artisan optimize
+          php artisan queue:restart
+          REMOTE
+
+      - name: Remove SSH key
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          if [ -n "${SSH_AGENT_PID:-}" ]; then
+            ssh-agent -k
+          fi
+          rm -f ~/.ssh/deploy_key
