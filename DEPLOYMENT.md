@@ -79,4 +79,16 @@ L'utilisateur SSH doit pouvoir creer le chemin DEPLOY_PATH ; configurer le
 serveur web vers DEPLOY_PATH/public et les permissions du processus PHP.
 Les migrations creent les tables apres le transfert du code.
 
-Le port SSH est fixe a 22 dans le workflow ; aucun secret SSH_PORT n’est utilise.
+Le port SSH utilise le secret optionnel `SSH_PORT` (22 par defaut).
+
+## Diagnostic d'un timeout SSH
+
+`ssh: connect to host ... port ...: Connection timed out` indique un echec
+avant l'authentification : verifier l'adresse SSH fournie par l'hebergeur,
+le port, l'activation de SSH et les regles du pare-feu pour les runners GitHub.
+Si une etape SSH precedente a reussi, verifier aussi un blocage temporaire
+ou une limite de connexions cote hebergeur.
+
+Le workflow limite l'attente de connexion et verifie l'acces SSH avant les
+commandes distantes. Ces controles ne debloquent pas le reseau du serveur.
+Un secret ENV_FILE vide est accepte si le serveur possede deja son .env.
