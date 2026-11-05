@@ -97,3 +97,13 @@ Les etapes SSH et rsync reutilisent une connexion via ControlMaster et
 ControlPersist (10 minutes). Cela reduit les nouvelles connexions si
 l'hebergeur applique une limitation. La connexion est fermee en fin de job.
 Si le timeout persiste, faire verifier les restrictions SSH par l'hebergeur.
+
+La connexion persistante est maintenant ouverte explicitement avant toute
+commande distante, avec 5 tentatives espacees de 20, 40, 60 et 80 secondes.
+Seule l'ouverture de connexion est repetee ; les migrations et les autres
+commandes de deploiement ne sont pas rejouees automatiquement.
+La recuperation des cles du serveur dispose aussi de 3 tentatives.
+Le secret optionnel SSH_KNOWN_HOSTS permet de fournir les cles du serveur
+verifiees aupres de l'hebergeur et d'eviter ssh-keyscan.
+Un filtrage permanent exige une intervention de l'hebergeur ; si les IP
+des runners sont filtrees, utiliser un runner avec une IP fixe autorisee.

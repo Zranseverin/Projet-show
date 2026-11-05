@@ -84,6 +84,7 @@ jobs:
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_PASSPHRASE: ${{ secrets.SSH_PASSPHRASE }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           : "${SSH_HOST:?Missing SSH_HOST}"
@@ -99,7 +100,7 @@ jobs:
           cat > ~/.ssh/config <<'SSH_CONFIG'
           Host *
             ConnectTimeout 15
-            ConnectionAttempts 2
+            ConnectionAttempts 1
             ServerAliveInterval 15
             ServerAliveCountMax 3
             ControlMaster auto
@@ -109,7 +110,21 @@ jobs:
           chmod 600 ~/.ssh/config
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts
+          if [ -n "$SSH_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            for attempt in 1 2 3; do
+              if ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts && [ -s ~/.ssh/known_hosts ]; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo '::error::Cannot retrieve SSH host keys. Check hosting firewall and SSH access, or configure the verified SSH_KNOWN_HOSTS secret.'
+                exit 1
+              fi
+              echo "::warning::SSH host key scan failed; retrying in $((attempt * 20)) seconds."
+              sleep "$((attempt * 20))"
+            done
+          fi
           test -s ~/.ssh/known_hosts
           eval "$(ssh-agent -s)"
           printf 'SSH_AUTH_SOCK=%s\nSSH_AGENT_PID=%s\n' "$SSH_AUTH_SOCK" "$SSH_AGENT_PID" >> "$GITHUB_ENV"
@@ -122,13 +137,24 @@ jobs:
           export DISPLAY=:0
           ssh-add ~/.ssh/deploy_key < /dev/null
 
-      - name: Verify SSH access
+      - name: Establish persistent SSH connection with retries
+        timeout-minutes: 8
         run: |
           set -euo pipefail
-          if ! ssh -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST" 'true'; then
-            echo '::error::SSH connection failed. Check SSH_HOST, SSH_PORT, hosting SSH access, firewall rules and any temporary IP ban. A connection timeout occurs before key authentication.'
-            exit 1
-          fi
+          for attempt in 1 2 3 4 5; do
+            echo "Establishing SSH connection (attempt $attempt/5)."
+            if ssh -MNf -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes -o StrictHostKeyChecking=yes "$SSH_USER@$SSH_HOST"; then
+              ssh -O check -p "$SSH_PORT" "$SSH_USER@$SSH_HOST"
+              exit 0
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              delay=$((attempt * 20))
+              echo "::warning::SSH unavailable; retrying in $delay seconds."
+              sleep "$delay"
+            fi
+          done
+          echo '::error::SSH unavailable after 5 attempts. No deployment commands were executed. Ask the hosting provider to check SSH firewall rules and temporary IP bans for this runner.'
+          exit 1
 
       - name: Prepare server
         run: |
