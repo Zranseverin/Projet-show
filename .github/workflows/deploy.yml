@@ -114,7 +114,7 @@ jobs:
             printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           else
             for attempt in 1 2 3; do
-              if ssh-keyscan -T 15 -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts && [ -s ~/.ssh/known_hosts ]; then
+              if ssh-keyscan -t ed25519 -T 15 -p "$SSH_PORT" -H "$SSH_HOST" > ~/.ssh/known_hosts && [ -s ~/.ssh/known_hosts ]; then
                 break
               fi
               if [ "$attempt" -eq 3 ]; then
@@ -126,6 +126,9 @@ jobs:
             done
           fi
           test -s ~/.ssh/known_hosts
+          if [ -z "$SSH_KNOWN_HOSTS" ]; then
+            sleep 20
+          fi
           eval "$(ssh-agent -s)"
           printf 'SSH_AUTH_SOCK=%s\nSSH_AGENT_PID=%s\n' "$SSH_AUTH_SOCK" "$SSH_AGENT_PID" >> "$GITHUB_ENV"
           askpass_script="$(mktemp "$RUNNER_TEMP/ssh-askpass.XXXXXX")"
