@@ -102,6 +102,9 @@ jobs:
             ConnectionAttempts 2
             ServerAliveInterval 15
             ServerAliveCountMax 3
+            ControlMaster auto
+            ControlPath ~/.ssh/deploy-%C
+            ControlPersist 10m
           SSH_CONFIG
           chmod 600 ~/.ssh/config
           printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
@@ -191,6 +194,9 @@ jobs:
         if: always()
         working-directory: ${{ github.workspace }}
         run: |
+          if [ -f ~/.ssh/deploy_key ]; then
+            ssh -O exit -i ~/.ssh/deploy_key -p "$SSH_PORT" -o BatchMode=yes "$SSH_USER@$SSH_HOST" 2>/dev/null || true
+          fi
           if [ -n "${SSH_AGENT_PID:-}" ]; then
             ssh-agent -k
           fi

@@ -92,3 +92,8 @@ ou une limite de connexions cote hebergeur.
 Le workflow limite l'attente de connexion et verifie l'acces SSH avant les
 commandes distantes. Ces controles ne debloquent pas le reseau du serveur.
 Un secret ENV_FILE vide est accepte si le serveur possede deja son .env.
+
+Les etapes SSH et rsync reutilisent une connexion via ControlMaster et
+ControlPersist (10 minutes). Cela reduit les nouvelles connexions si
+l'hebergeur applique une limitation. La connexion est fermee en fin de job.
+Si le timeout persiste, faire verifier les restrictions SSH par l'hebergeur.
