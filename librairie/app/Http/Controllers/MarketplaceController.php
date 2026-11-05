@@ -16,9 +16,13 @@ class MarketplaceController extends Controller
 
     public function index(Request $request)
     {
-        $filters = $request->validate(['q' => 'nullable|string|max:200', 'category' => 'nullable|integer', 'seller' => 'nullable|string|max:200', 'page' => 'nullable|integer|min:1']);
+        $filters = $request->validate(['q' => 'nullable|string|max:200', 'category' => 'nullable|integer', 'seller' => 'nullable|string|max:200', 'page' => 'nullable|integer|min:1',
+            'categories' => 'nullable|array|max:50', 'categories.*' => 'integer|min:1',
+            'sort' => 'nullable|in:newest,popular,price_asc,price_desc', 'sale' => 'nullable|boolean']);
+        $filters['sort'] ??= 'popular';
         $products = [];
         $categories = [];
+        $advertisements = [];
         $meta = ['current_page' => 1, 'last_page' => 1, 'total' => 0];
         $error = null;
         try {
@@ -32,12 +36,13 @@ class MarketplaceController extends Controller
             $options = $this->api()->get('/options');
             if ($options->successful()) {
                 $categories = $options->json('data.categories', []);
+                $advertisements = $options->json('data.advertisements', []);
             }
         } catch (ConnectionException $exception) {
             $error = 'La connexion au catalogue est momentanément indisponible.';
         }
 
-        return view('marketplace.catalog', compact('products', 'categories', 'meta', 'error'));
+        return view('marketplace.catalog', compact('products', 'categories', 'meta', 'error', 'advertisements'));
     }
 
     public function product(int $id)
@@ -56,6 +61,16 @@ class MarketplaceController extends Controller
     public function add(Request $request)
     {
         $data = $request->validate(['product_id' => 'required|integer|min:1', 'quantity' => 'required|integer|min:1|max:100']);
+        if (! $request->user()) {
+            $request->session()->put('pending_cart_item', $data);
+            return redirect()->route('register')->with('success', 'Créez votre compte ou connectez-vous pour ajouter ce produit au panier.');
+        }
+        return $this->addItem($request, $data);
+    }
+
+    public function addItem(Request $request, array $data)
+    {
+        abort_unless($request->user(), 403);
         try {
             $response = $this->api()->get('/products/'.$data['product_id']);
         } catch (ConnectionException $exception) {
@@ -124,9 +139,14 @@ class MarketplaceController extends Controller
             return redirect()->route('cart');
         }
         $data['request_key'] = $request->session()->get('checkout_key');
+        $data['customer_email'] = $request->user()->email;
         $data['items'] = array_values(array_map(fn ($line) => ['product_id' => $line['product']['id'], 'quantity' => $line['quantity']], $cart));
+        $checkoutKey = (string) config('services.marketplace.checkout_key');
+        if ($checkoutKey === '') {
+            return back()->withErrors(['order' => 'Le service de commande est temporairement indisponible.'])->withInput();
+        }
         try {
-            $response = $this->api()->post('/orders', $data);
+            $response = $this->api()->withHeaders(['X-Marketplace-Key' => $checkoutKey, 'X-Customer-Id' => (string) $request->user()->id])->post('/orders', $data);
         } catch (ConnectionException $exception) {
             return back()->withErrors(['order' => 'La confirmation a été interrompue. Réessayez avec les mêmes informations pour éviter une double commande.'])->withInput();
         }
@@ -134,6 +154,7 @@ class MarketplaceController extends Controller
             return back()->withErrors(['order' => $response->status() === 422 ? $response->json('message', 'Vérifiez votre panier et les informations saisies.') : 'Impossible de confirmer la commande. Réessayez.'])->withInput();
         }
         $request->session()->put('market_confirmation', $response->json('data'));
+        $request->session()->put('market_confirmation_user_id', $request->user()->id);
         $request->session()->forget(['market_cart', 'checkout_key']);
 
         return redirect()->route('order.confirmation');
@@ -141,7 +162,7 @@ class MarketplaceController extends Controller
 
     public function confirmation(Request $request)
     {
-        if (! $request->session()->has('market_confirmation')) {
+        if (! $request->session()->has('market_confirmation') || $request->session()->get('market_confirmation_user_id') !== $request->user()->id) {
             return redirect()->route('home');
         }
 

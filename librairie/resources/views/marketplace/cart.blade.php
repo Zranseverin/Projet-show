@@ -1,5 +1,5 @@
 @extends('marketplace.layout')
-@section('title', 'Mon panier · Marketplace')
+@section('title', 'Mon panier · Zran Market')
 @section('content')
 @php($cart = session('market_cart', []))
 @php($total = array_sum(array_map(fn($line) => $line['product']['price'] * $line['quantity'], $cart)))

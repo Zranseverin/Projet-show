@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'marketplace' => ['checkout_key' => env('MARKETPLACE_CHECKOUT_KEY')],
 
     /*
     |--------------------------------------------------------------------------
