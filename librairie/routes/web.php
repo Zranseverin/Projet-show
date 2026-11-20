@@ -14,6 +14,7 @@ Route::get('/commande', [MarketplaceController::class, 'checkout'])->middleware(
 Route::post('/commande', [MarketplaceController::class, 'order'])->middleware(['auth', 'throttle:10,1'])->name('checkout.store');
 Route::get('/commande/confirmation', [MarketplaceController::class, 'confirmation'])->middleware('auth')->name('order.confirmation');
 Route::get('/devenir-vendeur', fn () => redirect()->away(rtrim(preg_replace('#/api/?$#', '', config('api.base_url')), '/').'/devenir-vendeur'))->name('seller.register');
+Route::get('/inscription/vendeur/google', fn () => redirect()->away(rtrim(preg_replace('#/api/?$#', '', config('api.base_url')), '/').'/devenir-vendeur/google'))->name('seller.google');
 Route::get('/espace-vendeur', fn () => redirect()->away(rtrim(preg_replace('#/api/?$#', '', config('api.base_url')), '/').'/login'))->name('seller.login');
 Route::middleware('guest')->group(function () {
     Route::get('/connexion', [\App\Http\Controllers\CustomerAuthController::class, 'login'])->name('login');
